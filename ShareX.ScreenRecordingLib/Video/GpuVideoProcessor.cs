@@ -31,7 +31,7 @@ using Vortice.Mathematics;
 
 namespace ShareX.ScreenRecordingLib.Video;
 
-/// <summary>Crops/composes BGRA surfaces and converts to limited-range BT.709 NV12 on the GPU.</summary>
+/// <summary>Crops/composes BGRA surfaces, scales them and converts to limited-range BT.709 NV12 on the GPU.</summary>
 internal sealed class GpuVideoProcessor : IDisposable
 {
     private readonly GraphicsDevice graphics;
@@ -46,14 +46,20 @@ internal sealed class GpuVideoProcessor : IDisposable
     private ID3D11Texture2D? composite;
     private bool supportsCameraComposition;
     public ID3D11Texture2D Canvas { get; private set; } = null!;
+    /// <summary>Canvas size: the captured region in physical pixels.</summary>
     public int Width { get; }
     public int Height { get; }
+    /// <summary>Encoded size. Differs from the canvas when the recording is downscaled.</summary>
+    public int OutputWidth { get; }
+    public int OutputHeight { get; }
 
-    public GpuVideoProcessor(GraphicsDevice graphics, int width, int height, int fps)
+    public GpuVideoProcessor(GraphicsDevice graphics, int width, int height, int outputWidth, int outputHeight, int fps)
     {
         this.graphics = graphics;
         Width = width;
         Height = height;
+        OutputWidth = outputWidth;
+        OutputHeight = outputHeight;
         try
         {
             videoDevice = graphics.Device.QueryInterface<ID3D11VideoDevice>();
@@ -65,8 +71,8 @@ internal sealed class GpuVideoProcessor : IDisposable
                 OutputFrameRate = new((uint)fps, 1),
                 InputWidth = (uint)width,
                 InputHeight = (uint)height,
-                OutputWidth = (uint)width,
-                OutputHeight = (uint)height,
+                OutputWidth = (uint)outputWidth,
+                OutputHeight = (uint)outputHeight,
                 Usage = VideoUsage.PlaybackNormal
             };
             enumerator = videoDevice.CreateVideoProcessorEnumerator(desc);
@@ -85,10 +91,10 @@ internal sealed class GpuVideoProcessor : IDisposable
             videoContext.VideoProcessorSetOutputColorSpace(processor, new VideoProcessorColorSpace { YCbCr_Matrix = 1, Nominal_Range = 1 });
             videoContext.VideoProcessorSetStreamFrameFormat(processor, 0, VideoFrameFormat.Progressive);
             videoContext.VideoProcessorSetStreamAutoProcessingMode(processor, 0, false);
-            RawRect rect = new(0, 0, width, height);
-            videoContext.VideoProcessorSetStreamSourceRect(processor, 0, true, rect);
-            videoContext.VideoProcessorSetStreamDestRect(processor, 0, true, rect);
-            videoContext.VideoProcessorSetOutputTargetRect(processor, true, rect);
+            RawRect output = new(0, 0, outputWidth, outputHeight);
+            videoContext.VideoProcessorSetStreamSourceRect(processor, 0, true, new RawRect(0, 0, width, height));
+            videoContext.VideoProcessorSetStreamDestRect(processor, 0, true, output);
+            videoContext.VideoProcessorSetOutputTargetRect(processor, true, output);
         }
         catch { Dispose(); throw; }
     }
@@ -118,8 +124,11 @@ internal sealed class GpuVideoProcessor : IDisposable
                         videoContext.VideoProcessorSetStreamAutoProcessingMode(processor, 1, false);
                         videoContext.VideoProcessorSetStreamColorSpace(processor, 1, new VideoProcessorColorSpace { RGB_Range = 0, Nominal_Range = 2 });
                         videoContext.VideoProcessorSetStreamSourceRect(processor, 1, true, new RawRect(0, 0, camera.Bounds.Width, camera.Bounds.Height));
+                        // Camera bounds are canvas pixels; the destination is the scaled output.
                         var rect = camera.Bounds;
-                        videoContext.VideoProcessorSetStreamDestRect(processor, 1, true, new RawRect(rect.Left, rect.Top, rect.Right, rect.Bottom));
+                        videoContext.VideoProcessorSetStreamDestRect(processor, 1, true, new RawRect(
+                            rect.Left * OutputWidth / Width, rect.Top * OutputHeight / Height,
+                            rect.Right * OutputWidth / Width, rect.Bottom * OutputHeight / Height));
                     }
                     streams[1] = new() { Enable = true, InputSurface = cameraInput };
                     videoContext.VideoProcessorBlt(processor, output, frameNumber, 2, streams).CheckError();

@@ -74,7 +74,9 @@ internal sealed class ScreenRecorderBarSettings
         target.ScreenRecordCameraWidthPercent = Capture.ScreenRecordCameraWidthPercent;
         target.ScreenRecordCameraMargin = Capture.ScreenRecordCameraMargin;
         target.ScreenRecordRequireHardwareEncoder = Capture.ScreenRecordRequireHardwareEncoder;
+        target.ScreenRecordAutoBitrate = Capture.ScreenRecordAutoBitrate;
         target.ScreenRecordVideoBitrate = Capture.ScreenRecordVideoBitrate;
+        target.ScreenRecordOutputResolution = Capture.ScreenRecordOutputResolution;
         target.ScreenRecordFPS = Capture.ScreenRecordFPS;
         target.ScreenRecordShowCursor = Capture.ScreenRecordShowCursor;
         target.ScreenRecordMouseHighlighter = Capture.ScreenRecordMouseHighlighter;

@@ -29,7 +29,8 @@ using Vortice.MediaFoundation;
 
 namespace ShareX.ScreenRecordingLib.Audio;
 
-/// <summary>WASAPI shared-mode loopback and microphone capture, on a dedicated event-driven MTA thread.</summary>
+/// <summary>WASAPI shared-mode loopback and microphone capture, on a dedicated event-driven MTA thread.
+/// Sources without a chosen device follow the Windows default device, including changes during recording.</summary>
 internal sealed unsafe class WasapiCapture : IDisposable
 {
     private sealed class Endpoint : IDisposable
@@ -37,9 +38,10 @@ internal sealed unsafe class WasapiCapture : IDisposable
         public required ComPtr<IAudioClient3> Client;
         public required ComPtr<IAudioCaptureClient> Capture;
         public required AutoResetEvent Ready;
-        public required int Source;
-        public required float Gain;
+        public required string DeviceId;
         public bool Started;
+        /// <summary>The first packet of a replacement endpoint repositions the mixer stream.</summary>
+        public bool Replacement;
         public long NextPacketTime;
         public void Dispose()
         {
@@ -48,8 +50,22 @@ internal sealed unsafe class WasapiCapture : IDisposable
         }
     }
 
+    private sealed class Source
+    {
+        public required bool Loopback;
+        public required int Index;
+        public required float Gain;
+        /// <summary>Null follows the Windows default device.</summary>
+        public string? DeviceId;
+        public Endpoint? Endpoint;
+        public string? FailedDeviceId;
+        public string Name => Loopback ? "System audio" : "Microphone";
+    }
+
+    private static readonly long DeviceCheckInterval = TimeSpan.FromMilliseconds(500).Ticks;
     private readonly RecordingOptions options;
     private readonly AudioMixer mixer;
+    private readonly Action<string> diagnostic;
     private readonly Thread thread;
     private readonly ManualResetEvent stop = new(false);
     private readonly ManualResetEvent start = new(false);
@@ -58,10 +74,11 @@ internal sealed unsafe class WasapiCapture : IDisposable
     private int disposed;
     public Exception? Failure => Volatile.Read(ref failure);
 
-    public WasapiCapture(RecordingOptions options, AudioMixer mixer)
+    public WasapiCapture(RecordingOptions options, AudioMixer mixer, Action<string> diagnostic)
     {
         this.options = options;
         this.mixer = mixer;
+        this.diagnostic = diagnostic;
         thread = new Thread(Run) { IsBackground = true, Name = "ShareX WASAPI capture" };
         thread.Start();
         try { prepared.Task.GetAwaiter().GetResult(); }
@@ -70,24 +87,52 @@ internal sealed unsafe class WasapiCapture : IDisposable
 
     public void Start() => start.Set();
 
-    private Endpoint Open(IMMDeviceEnumerator enumerator, bool loopback, string? id, float gain)
+    /// <summary>Multimedia is the device Windows Settings shows as the default output and microphone.</summary>
+    internal static IMMDevice GetDefaultDevice(IMMDeviceEnumerator enumerator, bool loopback)
     {
-        IMMDevice device;
-        if (string.IsNullOrWhiteSpace(id))
+        try { return enumerator.GetDefaultAudioEndpoint(loopback ? DataFlow.Render : DataFlow.Capture, Role.Multimedia); }
+        catch (SharpGenException) when (!loopback) { return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications); }
+    }
+
+    private static string? GetDefaultDeviceId(IMMDeviceEnumerator enumerator, bool loopback)
+    {
+        try
+        {
+            using IMMDevice device = GetDefaultDevice(enumerator, loopback);
+            return device.Id;
+        }
+        catch (SharpGenException) { return null; }
+    }
+
+    /// <summary>Null when Windows has no default device yet; FollowDevice attaches one when it appears.</summary>
+    private Endpoint? OpenFirst(IMMDeviceEnumerator enumerator, Source source)
+    {
+        if (source.DeviceId != null)
         {
             try
             {
-                try { device = enumerator.GetDefaultAudioEndpoint(loopback ? DataFlow.Render : DataFlow.Capture, loopback ? Role.Multimedia : Role.Communications); }
-                catch (SharpGenException) when (!loopback) { device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia); }
+                using IMMDevice chosen = enumerator.GetDevice(source.DeviceId);
+                return Open(chosen, source.Loopback);
             }
-            catch (SharpGenException ex)
+            catch (Exception ex) when (ex is SharpGenException or System.Runtime.InteropServices.COMException)
             {
-                throw new InvalidOperationException(loopback ? "Windows has no available default system audio output device." : "Windows has no available default microphone. Connect or enable a microphone, or turn off microphone recording.", ex);
+                diagnostic($"{source.Name} device is unavailable; using the Windows default device. {ex.Message}");
+                source.DeviceId = null;
             }
         }
-        else device = enumerator.GetDevice(id);
-        using IMMDevice ownedDevice = device;
-        ComPtr<IAudioClient3> client = ActivateClient(ownedDevice);
+        IMMDevice device;
+        try { device = GetDefaultDevice(enumerator, source.Loopback); }
+        catch (SharpGenException)
+        {
+            diagnostic($"{source.Name}: Windows has no default device; it is recorded once one is connected.");
+            return null;
+        }
+        using (device) return Open(device, source.Loopback);
+    }
+
+    private static Endpoint Open(IMMDevice device, bool loopback)
+    {
+        ComPtr<IAudioClient3> client = ActivateClient(device);
         AutoResetEvent ready = new(false);
         try
         {
@@ -118,7 +163,7 @@ internal sealed unsafe class WasapiCapture : IDisposable
                         // Failed initialization can leave a client partially initialized. Retry on a
                         // fresh client so default-period Windows resampling also works for mono/44.1 kHz microphones.
                         client.Dispose();
-                        client = ActivateClient(ownedDevice);
+                        client = ActivateClient(device);
                     }
                 }
             }
@@ -128,7 +173,7 @@ internal sealed unsafe class WasapiCapture : IDisposable
             Guid iid = typeof(IAudioCaptureClient).GUID;
             void* rawCapture;
             client.Pointer->GetService(&iid, &rawCapture).ThrowOnFailure();
-            return new() { Client = client, Capture = new((IAudioCaptureClient*)rawCapture), Ready = ready, Source = loopback ? 0 : 1, Gain = gain };
+            return new() { Client = client, Capture = new((IAudioCaptureClient*)rawCapture), Ready = ready, DeviceId = device.Id };
         }
         catch { ready.Dispose(); client.Dispose(); throw; }
     }
@@ -140,9 +185,18 @@ internal sealed unsafe class WasapiCapture : IDisposable
         return new((IAudioClient3*)rawClient);
     }
 
+    private static void Begin(Endpoint endpoint)
+    {
+        endpoint.Client.Pointer->Start().ThrowOnFailure();
+        endpoint.Started = true;
+    }
+
+    /// <summary>WASAPI reports a removed, disabled or reconfigured endpoint with AUDCLNT_E_* errors.</summary>
+    private static bool IsEndpointLost(Exception ex) => ((uint)ex.HResult & 0xFFFF0000u) == 0x88890000u;
+
     private void Run()
     {
-        List<Endpoint> endpoints = new();
+        List<Source> sources = new();
         bool com = false;
         nint mmcss = 0;
         try
@@ -152,26 +206,98 @@ internal sealed unsafe class WasapiCapture : IDisposable
             uint taskIndex = 0;
             mmcss = NativeMethods.AvSetMmThreadCharacteristics("Audio", ref taskIndex);
             using IMMDeviceEnumerator enumerator = new();
-            if (options.CaptureSystemAudio) endpoints.Add(Open(enumerator, true, options.SystemAudioDeviceId, options.SystemAudioGain));
-            if (options.CaptureMicrophone) endpoints.Add(Open(enumerator, false, options.MicrophoneDeviceId, options.MicrophoneGain));
+            if (options.CaptureSystemAudio)
+                sources.Add(new() { Loopback = true, Index = 0, Gain = options.SystemAudioGain, DeviceId = NullIfEmpty(options.SystemAudioDeviceId) });
+            if (options.CaptureMicrophone)
+                sources.Add(new() { Loopback = false, Index = 1, Gain = options.MicrophoneGain, DeviceId = NullIfEmpty(options.MicrophoneDeviceId) });
+            foreach (Source source in sources) source.Endpoint = OpenFirst(enumerator, source);
             prepared.TrySetResult();
             if (WaitHandle.WaitAny([stop, start]) == 0) return;
-            foreach (Endpoint endpoint in endpoints) { endpoint.Client.Pointer->Start().ThrowOnFailure(); endpoint.Started = true; }
-            WaitHandle[] events = [stop, .. endpoints.Select(x => x.Ready)];
+            foreach (Source source in sources) if (source.Endpoint != null) Begin(source.Endpoint);
+            WaitHandle[] events = GetEvents(sources);
+            long nextDeviceCheck = RecordingClock.Now + DeviceCheckInterval;
             while (WaitHandle.WaitAny(events, 100) != 0)
-                foreach (Endpoint endpoint in endpoints) Drain(endpoint);
-            foreach (Endpoint endpoint in endpoints) Drain(endpoint);
+            {
+                bool changed = false;
+                foreach (Source source in sources) changed |= Drain(source);
+                if (RecordingClock.Now >= nextDeviceCheck)
+                {
+                    foreach (Source source in sources) changed |= FollowDevice(enumerator, source);
+                    nextDeviceCheck = RecordingClock.Now + DeviceCheckInterval;
+                }
+                if (changed) events = GetEvents(sources);
+            }
+            foreach (Source source in sources) Drain(source);
         }
         catch (Exception ex) { Volatile.Write(ref failure, ex); prepared.TrySetException(ex); }
         finally
         {
-            foreach (Endpoint endpoint in endpoints) endpoint.Dispose();
+            foreach (Source source in sources) source.Endpoint?.Dispose();
             if (mmcss != 0) NativeMethods.AvRevertMmThreadCharacteristics(mmcss);
             if (com) NativeMethods.CoUninitialize();
         }
     }
 
-    private void Drain(Endpoint endpoint)
+    private static string? NullIfEmpty(string? id) => string.IsNullOrWhiteSpace(id) ? null : id;
+
+    private WaitHandle[] GetEvents(List<Source> sources) =>
+        [stop, .. sources.Where(x => x.Endpoint != null).Select(x => x.Endpoint!.Ready)];
+
+    /// <summary>Returns true when the source lost its endpoint and the wait handles must be rebuilt.</summary>
+    private bool Drain(Source source)
+    {
+        if (source.Endpoint == null) return false;
+        try
+        {
+            Drain(source, source.Endpoint);
+            return false;
+        }
+        catch (Exception ex) when (IsEndpointLost(ex))
+        {
+            // A chosen device that disappears is replaced by the Windows default rather than ending the recording.
+            diagnostic($"{source.Name} device stopped responding; switching to the Windows default device. {ex.Message}");
+            source.Endpoint.Dispose();
+            source.Endpoint = null;
+            source.DeviceId = null;
+            mixer.MarkDiscontinuity();
+            return true;
+        }
+    }
+
+    /// <summary>Moves the source to the device it should record, such as a new Windows default output.</summary>
+    private bool FollowDevice(IMMDeviceEnumerator enumerator, Source source)
+    {
+        string? wanted = source.DeviceId ?? GetDefaultDeviceId(enumerator, source.Loopback);
+        if (wanted == null || wanted == source.Endpoint?.DeviceId) return false;
+        Endpoint? replacement = null;
+        string name;
+        try
+        {
+            using IMMDevice device = enumerator.GetDevice(wanted);
+            name = device.FriendlyName;
+            replacement = Open(device, source.Loopback);
+            Begin(replacement);
+        }
+        catch (Exception ex) when (ex is SharpGenException or System.Runtime.InteropServices.COMException)
+        {
+            // Devices can be mid-transition. Retry on the next check; report a device only once.
+            replacement?.Dispose();
+            if (source.FailedDeviceId != wanted) diagnostic($"{source.Name} could not open the new device yet. {ex.Message}");
+            source.FailedDeviceId = wanted;
+            return false;
+        }
+        // Keep the last packets of the previous device before closing it.
+        Drain(source);
+        source.Endpoint?.Dispose();
+        replacement.Replacement = true;
+        source.Endpoint = replacement;
+        source.FailedDeviceId = null;
+        mixer.MarkDiscontinuity();
+        diagnostic($"{source.Name} now records '{name}'.");
+        return true;
+    }
+
+    private void Drain(Source source, Endpoint endpoint)
     {
         while (true)
         {
@@ -185,13 +311,15 @@ internal sealed unsafe class WasapiCapture : IDisposable
             if (frames == 0) return;
             try
             {
+                bool discontinuity = (flags & 1) != 0 || endpoint.Replacement;
+                endpoint.Replacement = false;
                 if ((flags & 1) != 0) mixer.MarkDiscontinuity();
                 long packetTime = (flags & 4) == 0 ? (long)timestamp : endpoint.NextPacketTime != 0 ? endpoint.NextPacketTime : RecordingClock.Now - frames * TimeSpan.TicksPerSecond / AudioMixer.SampleRate;
                 if ((flags & 4) != 0) mixer.MarkDiscontinuity();
                 endpoint.NextPacketTime = packetTime + frames * TimeSpan.TicksPerSecond / AudioMixer.SampleRate;
                 // Silent packets still advance the sample clock; their buffer pointer must not be read.
                 ReadOnlySpan<float> packet = (flags & 2) == 0 ? new(data, checked((int)frames * 2)) : ReadOnlySpan<float>.Empty;
-                mixer.Write(endpoint.Source, packetTime, checked((int)frames), packet, endpoint.Gain, (flags & 1) != 0);
+                mixer.Write(source.Index, packetTime, checked((int)frames), packet, source.Gain, discontinuity);
             }
             finally { endpoint.Capture.Pointer->ReleaseBuffer(frames).ThrowOnFailure(); }
         }

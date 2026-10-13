@@ -491,7 +491,8 @@ namespace ShareX
                     Region = recordForm.RecordingRegion,
                     WindowHandle = captureWindow,
                     FramesPerSecond = settings.CaptureSettings.ScreenRecordFPS,
-                    VideoBitrate = settings.CaptureSettings.ScreenRecordVideoBitrate * 1000,
+                    OutputResolution = settings.CaptureSettings.ScreenRecordOutputResolution,
+                    VideoBitrate = settings.CaptureSettings.ScreenRecordAutoBitrate ? 0 : settings.CaptureSettings.ScreenRecordVideoBitrate * 1000,
                     CaptureSystemAudio = settings.CaptureSettings.ScreenRecordSystemAudio,
                     SystemAudioDeviceId = settings.CaptureSettings.ScreenRecordSystemAudioDeviceId,
                     SystemAudioGain = settings.CaptureSettings.ScreenRecordSystemAudioGain,
@@ -518,6 +519,8 @@ namespace ShareX
                     // Initialize the GPU, codecs and audio endpoints before the countdown.
                     // Prepare does not start video or audio capture.
                     await nativeRecorder.PrepareAsync();
+                    DebugHelper.WriteLine("Native recorder: {0}x{1} at {2} FPS, {3} kbps, encoder: {4}", nativeRecorder.OutputSize.Width,
+                        nativeRecorder.OutputSize.Height, options.FramesPerSecond, nativeRecorder.VideoBitrate / 1000, nativeRecorder.Encoder?.Name);
                     int delay = settings.CaptureSettings.ScreenRecordStartDelayEnabled
                         ? (int)(settings.CaptureSettings.ScreenRecordStartDelay * 1000) : 0;
                     if (delay > 0)

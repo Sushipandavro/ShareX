@@ -5574,6 +5574,9 @@ namespace ShareX.Localization {
         public static string TaskSettingsWindow_NativeRecorderUnavailableMicrophone => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderUnavailableMicrophone", resourceCulture);
         public static string TaskSettingsWindow_NativeRecorderHardware => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderHardware", resourceCulture);
         public static string TaskSettingsWindow_NativeRecorderBitrate => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderBitrate", resourceCulture);
+        public static string TaskSettingsWindow_NativeRecorderAutoBitrate => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderAutoBitrate", resourceCulture);
+        public static string TaskSettingsWindow_NativeRecorderOutputResolution => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderOutputResolution", resourceCulture);
+        public static string TaskSettingsWindow_NativeRecorderOutputResolutionSource => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderOutputResolutionSource", resourceCulture);
         public static string TaskSettingsWindow_NativeRecorderCamera => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderCamera", resourceCulture);
         public static string TaskSettingsWindow_NativeRecorderCamera_Enabled => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderCamera_Enabled", resourceCulture);
         public static string TaskSettingsWindow_NativeRecorderCamera_Device => ResourceManager.GetString("TaskSettingsWindow_NativeRecorderCamera_Device", resourceCulture);

@@ -35,6 +35,9 @@ public sealed record RecordingOptions
     /// <summary>When nonzero, capture this window (including when occluded) instead of Region.</summary>
     public nint WindowHandle { get; init; }
     public int FramesPerSecond { get; init; } = 30;
+    /// <summary>Downscale on the GPU so the shorter side is at most this size. Never upscales.</summary>
+    public RecordingResolution OutputResolution { get; init; }
+    /// <summary>Bits per second. Zero selects a bitrate from the output size and frame rate.</summary>
     public int VideoBitrate { get; init; } = 8_000_000;
     public int AudioBitrate { get; init; } = 192_000;
     public bool IncludeCursor { get; init; } = true;
@@ -73,7 +76,8 @@ public sealed record RecordingOptions
         if (WindowHandle == 0 && (Region.Width < 2 || Region.Height < 2))
             throw new ArgumentException("Select a window or a region of at least 2 × 2 pixels.", nameof(Region));
         if (FramesPerSecond is < 1 or > 240) throw new ArgumentOutOfRangeException(nameof(FramesPerSecond));
-        if (VideoBitrate is < 100_000 or > 200_000_000) throw new ArgumentOutOfRangeException(nameof(VideoBitrate));
+        if (VideoBitrate != 0 && VideoBitrate is < 100_000 or > 200_000_000) throw new ArgumentOutOfRangeException(nameof(VideoBitrate));
+        if (!Enum.IsDefined(OutputResolution)) throw new ArgumentOutOfRangeException(nameof(OutputResolution));
         if (AudioBitrate is not (96_000 or 128_000 or 160_000 or 192_000)) throw new ArgumentOutOfRangeException(nameof(AudioBitrate));
         if (Duration < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(Duration));
         if (!Enum.IsDefined(CameraResolution)) throw new ArgumentOutOfRangeException(nameof(CameraResolution));
@@ -85,7 +89,27 @@ public sealed record RecordingOptions
         if (!float.IsFinite(SystemAudioGain) || SystemAudioGain is < 0 or > 4) throw new ArgumentOutOfRangeException(nameof(SystemAudioGain));
         if (!float.IsFinite(MicrophoneGain) || MicrophoneGain is < 0 or > 4) throw new ArgumentOutOfRangeException(nameof(MicrophoneGain));
     }
+
+    /// <summary>The encoded size for a capture size: aspect ratio kept, even dimensions, never upscaled.</summary>
+    internal Size GetOutputSize(int width, int height)
+    {
+        int target = (int)OutputResolution;
+        int shortSide = Math.Min(width, height);
+        if (target == 0 || shortSide <= target) return new(width, height);
+        return new(Math.Max(2, (int)Math.Round((double)width * target / shortSide) & ~1),
+            Math.Max(2, (int)Math.Round((double)height * target / shortSide) & ~1));
+    }
+
+    internal int GetVideoBitrate(int width, int height) =>
+        VideoBitrate > 0 ? VideoBitrate : GetAutoVideoBitrate(width, height, FramesPerSecond);
+
+    /// <summary>About 0.13 bits per pixel per frame: 1080p60 ≈ 16 Mbps, 1080p144 ≈ 39 Mbps, 2160p60 ≈ 65 Mbps.</summary>
+    public static int GetAutoVideoBitrate(int width, int height, int fps) =>
+        (int)Math.Clamp((long)width * height * fps * 13 / 100, 2_000_000, 150_000_000);
 }
+
+/// <summary>Maximum length of the recording's shorter side. Values are pixels.</summary>
+public enum RecordingResolution { Source = 0, Size720p = 720, Size1080p = 1080, Size1440p = 1440, Size2160p = 2160 }
 
 public sealed record VideoEncoderInfo(string Name, bool IsHardwareAccelerated, bool IsD3D11Aware);
 

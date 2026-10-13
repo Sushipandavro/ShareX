@@ -51,8 +51,11 @@ public sealed class ScreenRecorder : IDisposable, IAsyncDisposable
 
     public Task<RecordingResult> Completion => completed.Task;
     public VideoEncoderInfo? Encoder { get; private set; }
+    /// <summary>Encoded video size and bitrate, known once PrepareAsync completes.</summary>
+    public Size OutputSize { get; private set; }
+    public int VideoBitrate { get; private set; }
     public CameraCaptureInfo? Camera { get; private set; }
-    /// <summary>Nonfatal camera errors; screen and audio recording continue.</summary>
+    /// <summary>Nonfatal camera errors and audio device switches; screen and audio recording continue.</summary>
     public event Action<string>? Diagnostic;
     public bool IsRecording => Volatile.Read(ref recording) != 0;
     public bool IsPaused => clock.IsPaused;
@@ -160,10 +163,13 @@ public sealed class ScreenRecorder : IDisposable, IAsyncDisposable
             // Reserve the name atomically. Never overwrite or delete a pre-existing user file.
             using (new FileStream(options.OutputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
             ownsOutput = true;
+            Size output = options.GetOutputSize(width, height);
             using GraphicsDevice graphics = new(targets[0].Monitor);
-            using GpuVideoProcessor processor = new(graphics, width, height, options.FramesPerSecond);
-            using MediaFoundationWriter writer = new(graphics, options, width, height);
+            using GpuVideoProcessor processor = new(graphics, width, height, output.Width, output.Height, options.FramesPerSecond);
+            using MediaFoundationWriter writer = new(graphics, options, output.Width, output.Height);
             Encoder = writer.Encoder;
+            OutputSize = output;
+            VideoBitrate = writer.VideoBitrate;
             using VideoTexturePool textures = new(graphics, processor, writer.EncoderBindFlags);
             using GraphicsCapture capture = new(graphics, processor, targets, options.IncludeCursor, options.FramesPerSecond);
             using CameraCapture? camera = options.CaptureCamera ? new(graphics, options) : null;
@@ -171,7 +177,7 @@ public sealed class ScreenRecorder : IDisposable, IAsyncDisposable
             using CameraOverlay? cameraOverlay = camera == null ? null : new(graphics, camera.Info, camera.Subtype,
                 camera.Stride, camera.YuvMatrix, camera.NominalRange, options, width, height);
             AudioMixer mixer = new(clock);
-            using WasapiCapture? audio = options.HasAudio ? new(options, mixer) : null;
+            using WasapiCapture? audio = options.HasAudio ? new(options, mixer, ReportDiagnostic) : null;
             prepared.TrySetResult();
             if (WaitHandle.WaitAny([stop, begin]) == 0) throw new OperationCanceledException("Recording stopped before capture began.");
             camera?.Start();

@@ -2518,6 +2518,9 @@ Do you want to abort the active screen recording?</value>
   <data name="TaskSettingsWindow_NativeRecorder" xml:space="preserve">
     <value>Built-in screen recorder</value>
   </data>
+  <data name="TaskSettingsWindow_NativeRecorderAutoBitrate" xml:space="preserve">
+    <value>Automatic bitrate (based on resolution and FPS)</value>
+  </data>
   <data name="TaskSettingsWindow_NativeRecorderBitrate" xml:space="preserve">
     <value>Video bitrate (kbps):</value>
   </data>
@@ -2561,10 +2564,10 @@ Do you want to abort the active screen recording?</value>
     <value>Width (% of recording):</value>
   </data>
   <data name="TaskSettingsWindow_NativeRecorderDefaultMicrophone" xml:space="preserve">
-    <value>Default microphone</value>
+    <value>Follow Windows default microphone</value>
   </data>
   <data name="TaskSettingsWindow_NativeRecorderDefaultSystemAudioDevice" xml:space="preserve">
-    <value>Default output device</value>
+    <value>Follow Windows default output</value>
   </data>
   <data name="TaskSettingsWindow_NativeRecorderEnabled" xml:space="preserve">
     <value>Use built-in screen recorder</value>
@@ -2577,6 +2580,12 @@ Do you want to abort the active screen recording?</value>
   </data>
   <data name="TaskSettingsWindow_NativeRecorderMicrophoneDevice" xml:space="preserve">
     <value>Microphone:</value>
+  </data>
+  <data name="TaskSettingsWindow_NativeRecorderOutputResolution" xml:space="preserve">
+    <value>Output resolution:</value>
+  </data>
+  <data name="TaskSettingsWindow_NativeRecorderOutputResolutionSource" xml:space="preserve">
+    <value>Source (no scaling)</value>
   </data>
   <data name="TaskSettingsWindow_NativeRecorderSystemAudio" xml:space="preserve">
     <value>Record system audio</value>

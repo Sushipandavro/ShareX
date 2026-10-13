@@ -417,7 +417,9 @@ namespace ShareX
         public int ScreenRecordCameraWidthPercent = 20;
         public int ScreenRecordCameraMargin = 20;
         public bool ScreenRecordRequireHardwareEncoder = true;
+        public bool ScreenRecordAutoBitrate = true;
         public int ScreenRecordVideoBitrate = 10000; // kbps
+        public ShareX.ScreenRecordingLib.RecordingResolution ScreenRecordOutputResolution = ShareX.ScreenRecordingLib.RecordingResolution.Source;
         public int ScreenRecordFPS = 30;
         public int GIFFPS = 15;
         public bool ScreenRecordShowCursor = true;

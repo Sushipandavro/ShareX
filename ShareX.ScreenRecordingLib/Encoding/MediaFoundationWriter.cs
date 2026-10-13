@@ -39,6 +39,7 @@ internal sealed unsafe class MediaFoundationWriter : IDisposable
     private bool started, finalized;
     public VideoEncoderInfo Encoder { get; private set; } = null!;
     public BindFlags EncoderBindFlags { get; private set; }
+    public int VideoBitrate { get; private set; }
 
     public MediaFoundationWriter(GraphicsDevice graphics, RecordingOptions options, int width, int height)
     {
@@ -55,11 +56,22 @@ internal sealed unsafe class MediaFoundationWriter : IDisposable
             attributes.Set(SinkWriterAttributeKeys.D3DManager, deviceManager).CheckError();
             writer = MediaFactory.MFCreateSinkWriterFromURL(options.OutputPath, null!, attributes);
             using IMFMediaType videoOut = CreateVideoType(VideoFormatGuids.H264, width, height, options.FramesPerSecond);
-            videoOut.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)options.VideoBitrate).CheckError();
-            videoOut.Set(MediaTypeAttributeKeys.Mpeg2Profile, 77u).CheckError(); // H.264 Main
-            videoStream = writer.AddStream(videoOut);
-            using IMFMediaType videoIn = CreateVideoType(VideoFormatGuids.NV12, width, height, options.FramesPerSecond);
-            writer.SetInputMediaType(videoStream, videoIn, null!);
+            VideoBitrate = options.GetVideoBitrate(width, height);
+            videoOut.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)VideoBitrate).CheckError();
+            videoOut.Set(MediaTypeAttributeKeys.Mpeg2Profile, 100u).CheckError(); // H.264 High
+            try
+            {
+                videoStream = writer.AddStream(videoOut);
+                using IMFMediaType videoIn = CreateVideoType(VideoFormatGuids.NV12, width, height, options.FramesPerSecond);
+                writer.SetInputMediaType(videoStream, videoIn, null!);
+            }
+            catch (SharpGenException ex) when ((uint)ex.HResult == 0xC00D36B4) // MF_E_INVALIDMEDIATYPE
+            {
+                // Hardware H.264 encoders commonly stop at Level 5.2: 2,073,600 macroblocks per second.
+                long macroblocks = (long)((width + 15) / 16) * ((height + 15) / 16);
+                throw new NotSupportedException($"The H.264 encoder rejected {width} × {height} at {options.FramesPerSecond} FPS. " +
+                    $"H.264 Level 5.2 allows up to {2_073_600 / macroblocks} FPS at this size; lower the FPS or choose a lower output resolution.", ex);
+            }
             if (options.HasAudio) AddAudio(options.AudioBitrate);
             Encoder = InspectVideoEncoder();
             if (options.RequireHardwareEncoder && (!Encoder.IsHardwareAccelerated || !Encoder.IsD3D11Aware))

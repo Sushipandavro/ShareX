@@ -53,13 +53,8 @@ public static unsafe class AudioCaptureDevices
         try
         {
             using IMMDeviceEnumerator enumerator = new();
-            IMMDevice endpoint;
-            try { endpoint = enumerator.GetDefaultAudioEndpoint(flow, flow == DataFlow.Render ? Role.Multimedia : Role.Communications); }
-            catch (SharpGenException) when (flow == DataFlow.Capture)
-            {
-                endpoint = enumerator.GetDefaultAudioEndpoint(flow, Role.Multimedia);
-            }
-            using (endpoint) return new(endpoint.Id, endpoint.FriendlyName);
+            using IMMDevice endpoint = Audio.WasapiCapture.GetDefaultDevice(enumerator, flow == DataFlow.Render);
+            return new(endpoint.Id, endpoint.FriendlyName);
         }
         catch (Exception ex) when (ex is COMException or SharpGenException) { return null; }
         finally { if (initialized.Succeeded) NativeMethods.CoUninitialize(); }
